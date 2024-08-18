@@ -2,8 +2,9 @@ import requests
 import os
 import json
 import time
+import hashlib
 from requests.exceptions import RequestException
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 class FileBrowserFetcher:
     def __init__(self, url, username, password, download_path):
@@ -36,13 +37,17 @@ class FileBrowserFetcher:
                     raise
 
     def normalize_path(self, path):
-        return path.replace('\\', '/').strip('/')
+        return unquote(path.replace('\\', '/').strip('/'))
+
+    def encode_path(self, path):
+        return quote(self.normalize_path(path))
 
     def check_set_class_b_file(self, dir_path):
         normalized_path = self.normalize_path(dir_path)
+        encoded_path = self.encode_path(dir_path)
         try:
             response = requests.get(
-                f'{self.url}/api/resources/{quote(normalized_path)}',
+                f'{self.url}/api/resources/{encoded_path}',
                 headers={'X-Auth': self.token}
             )
             response.raise_for_status()
@@ -57,9 +62,10 @@ class FileBrowserFetcher:
 
     def check_set_skip_file(self, dir_path):
         normalized_path = self.normalize_path(dir_path)
+        encoded_path = self.encode_path(dir_path)
         try:
             response = requests.get(
-                f'{self.url}/api/resources/{quote(normalized_path)}',
+                f'{self.url}/api/resources/{encoded_path}',
                 headers={'X-Auth': self.token}
             )
             response.raise_for_status()
@@ -74,6 +80,7 @@ class FileBrowserFetcher:
 
     def explore_and_fetch(self, dir_path='/'):
         normalized_path = self.normalize_path(dir_path)
+        encoded_path = self.encode_path(dir_path)
         print(f'Exploring directory: /{normalized_path}')
         try:
             if self.check_set_skip_file(normalized_path):
@@ -85,7 +92,7 @@ class FileBrowserFetcher:
                 self.download_directory_contents(normalized_path)
 
             response = requests.get(
-                f'{self.url}/api/resources/{quote(normalized_path)}',
+                f'{self.url}/api/resources/{encoded_path}',
                 headers={'X-Auth': self.token}
             )
             response.raise_for_status()
@@ -111,9 +118,10 @@ class FileBrowserFetcher:
 
     def download_directory_contents(self, dir_path):
         normalized_path = self.normalize_path(dir_path)
+        encoded_path = self.encode_path(dir_path)
         try:
             response = requests.get(
-                f'{self.url}/api/resources/{quote(normalized_path)}',
+                f'{self.url}/api/resources/{encoded_path}',
                 headers={'X-Auth': self.token}
             )
             response.raise_for_status()
@@ -145,27 +153,69 @@ class FileBrowserFetcher:
         except RequestException as e:
             print(f"Error downloading directory contents /{normalized_path}: {e}")
 
-    def download_file(self, remote_path, local_path):
-        if os.path.exists(local_path):
-            print(f'File already exists, skipping: {local_path}')
-            return
+    def calculate_file_hash(self, file_path):
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
 
+    def get_remote_checksum(self, remote_path):
+        encoded_path = self.encode_path(remote_path)
+        checksum_url = f'{self.url}/api/resources/{encoded_path}?checksum=sha256'
+        response = requests.get(checksum_url, headers={'X-Auth': self.token})
+        response.raise_for_status()
+        file_info = response.json()
+        return file_info['checksums']['sha256']
+
+    def download_file(self, remote_path, local_path):
         normalized_path = self.normalize_path(remote_path)
-        print(f'Downloading: /{normalized_path}')
+        encoded_path = self.encode_path(remote_path)
+        print(f'Checking: /{normalized_path}')
+        
         for attempt in range(self.max_retries):
             try:
+                remote_checksum = self.get_remote_checksum(remote_path)
+                print(f"Remote checksum: {remote_checksum}")
+
+                if os.path.exists(local_path):
+                    local_checksum = self.calculate_file_hash(local_path)
+                    if local_checksum == remote_checksum:
+                        print(f'File unchanged, skipping: {local_path}')
+                        return
+                    else:
+                        print(f'File changed, updating: {local_path}')
+
                 response = requests.get(
-                    f'{self.url}/api/raw/{quote(normalized_path)}',
+                    f'{self.url}/api/raw/{encoded_path}',
                     headers={'X-Auth': self.token},
                     stream=True
                 )
                 response.raise_for_status()
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                
+                hash_sha256 = hashlib.sha256()
                 with open(local_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
+                        hash_sha256.update(chunk)
                         f.write(chunk)
-                print(f'Successfully downloaded: /{normalized_path}')
+                
+                downloaded_checksum = hash_sha256.hexdigest()
+                print(f"Calculated checksum during download: {downloaded_checksum}")
+                
+                file_checksum = self.calculate_file_hash(local_path)
+                print(f"Calculated checksum after download: {file_checksum}")
+                
+                if file_checksum != remote_checksum:
+                    print(f"Checksum mismatch for {local_path}")
+                    print(f"Remote checksum: {remote_checksum}")
+                    print(f"Local checksum: {file_checksum}")
+                    print(f"File size: {os.path.getsize(local_path)} bytes")
+                    raise Exception(f"Checksum mismatch for {local_path}")
+                
+                print(f'Successfully downloaded and verified: /{normalized_path}')
                 return
+
             except RequestException as e:
                 print(f"Attempt {attempt + 1} failed for /{normalized_path}: {e}")
                 if attempt < self.max_retries - 1:
