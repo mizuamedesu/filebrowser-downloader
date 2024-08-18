@@ -180,7 +180,7 @@ class FileBrowserFetcher:
                     print(f"Failed to download /{normalized_path} after {self.max_retries} attempts. Skipping.")
 
 def main():
-    url = 'http:localhost:8080'  # replace
+    url = 'http://localhost:8080'  # replace
     username = 'admin'  # replace
     password = 'admin'  # replace
     download_path = r'C:\replace'  # replace
