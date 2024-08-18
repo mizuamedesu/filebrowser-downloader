@@ -78,13 +78,12 @@ class FileBrowserFetcher:
         try:
             if self.check_set_skip_file(normalized_path):
                 print(f'Found set.skip file in /{normalized_path}. Skipping this directory and its contents.')
-                return False
+                return
 
             if self.check_set_class_b_file(normalized_path):
                 print(f'Found set.classB file in /{normalized_path}. Downloading contents...')
                 self.download_directory_contents(normalized_path)
-                return True
-            
+
             response = requests.get(
                 f'{self.url}/api/resources/{quote(normalized_path)}',
                 headers={'X-Auth': self.token}
@@ -94,7 +93,7 @@ class FileBrowserFetcher:
             content = response.json()
             if not isinstance(content, dict) or 'items' not in content:
                 print(f"Unexpected response format for /{normalized_path}. Skipping.")
-                return False
+                return
 
             items = content['items']
             for item in items:
@@ -105,14 +104,10 @@ class FileBrowserFetcher:
 
                 if item.get('isDir'):
                     sub_dir_path = f"{normalized_path}/{name}"
-                    if self.explore_and_fetch(sub_dir_path):
-                        return True
-
-            return False
+                    self.explore_and_fetch(sub_dir_path)
 
         except RequestException as e:
             print(f"Error exploring directory /{normalized_path}: {e}")
-            return False
 
     def download_directory_contents(self, dir_path):
         normalized_path = self.normalize_path(dir_path)
@@ -183,7 +178,7 @@ def main():
     url = 'http://localhost:8080'  # replace
     username = 'admin'  # replace
     password = 'admin'  # replace
-    download_path = r'C:\replace'  # replace
+    download_path = r'C:\replace\your\path'  # replace
     
     os.makedirs(download_path, exist_ok=True)
 
